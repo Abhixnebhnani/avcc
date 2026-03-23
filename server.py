@@ -37,19 +37,25 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ── YOLOv8 ────────────────────────────────────────────────
 import os as _os
+
+# Fix for PyTorch >= 2.6: weights_only=True breaks older .pt files
+# Patch torch.load to allow unsafe loading for YOLO weights
+import torch as _torch
+_original_torch_load = _torch.load
+def _patched_torch_load(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+_torch.load = _patched_torch_load
+
 _YOLO_ERROR = None
 try:
     from ultralytics import YOLO
-    # Use absolute path relative to this script file
     _model_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "yolov8n.pt")
-    _model_exists = _os.path.exists(_model_path)
-    print(f"📁 Model path: {_model_path}, exists: {_model_exists}")
-    if not _model_exists:
-        # Fallback: let ultralytics download it
+    if not _os.path.exists(_model_path):
         _model_path = "yolov8n.pt"
-        print("📥 Model not found locally, will download...")
     model = YOLO(_model_path)
-    # Warm up with a dummy inference to catch any runtime errors
+    # Warm up
     import numpy as _np
     model(_np.zeros((64, 64, 3), dtype=_np.uint8), verbose=False)
     YOLO_AVAILABLE = True
