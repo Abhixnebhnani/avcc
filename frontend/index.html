@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AVCC Gantry — Live Detection</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@400;700;900&display=swap');
+  :root {
+    --bg:#050a0f; --panel:#0a1520; --panel2:#0d1e2e;
+    --border:#1a3a55; --accent:#00d4ff; --accent2:#ff6b35;
+    --accent3:#39ff14; --warn:#ffcc00; --text:#c8e6f5; --dim:#4a7a99;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;overflow-x:hidden}
+
+  /* HEADER */
+  header{background:linear-gradient(90deg,#050a0f,#0a1a2a,#050a0f);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+  .logo{font-family:'Orbitron',monospace;font-size:1rem;font-weight:900;letter-spacing:3px;color:var(--accent);text-shadow:0 0 20px var(--accent)}
+  .logo span{color:var(--accent2)}
+  .hbar{display:flex;gap:12px;align-items:center}
+  .pill{padding:3px 10px;border:1px solid;border-radius:2px;font-family:'Share Tech Mono',monospace;font-size:0.68rem}
+  .pill-green{border-color:var(--accent3);color:var(--accent3)}
+  .pill-red{border-color:#ff4444;color:#ff4444}
+  .pill-yellow{border-color:var(--warn);color:var(--warn)}
+  .clock{font-family:'Share Tech Mono',monospace;color:var(--warn);font-size:0.82rem}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0.4}}
+
+  /* LAYOUT */
+  .main{display:grid;grid-template-columns:1fr 360px;gap:14px;padding:14px;max-width:1500px;margin:0 auto}
+
+  /* VIDEO SECTION */
+  .video-section{display:flex;flex-direction:column;gap:10px}
+  .section-label{font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:3px;color:var(--dim);margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .section-label::before{content:'';width:3px;height:13px;background:var(--accent);display:inline-block}
+
+  /* UPLOAD ZONE */
+  .upload-zone{border:2px dashed var(--border);border-radius:6px;padding:28px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--panel);position:relative}
+  .upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:#0a1a2a}
+  .upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+  .upload-icon{font-size:2.5rem;margin-bottom:8px}
+  .upload-title{font-family:'Orbitron',monospace;font-size:0.8rem;color:var(--accent);letter-spacing:2px}
+  .upload-sub{font-size:0.75rem;color:var(--dim);margin-top:4px;font-family:'Share Tech Mono',monospace}
+
+  /* VIDEO PLAYER */
+  .video-wrap{position:relative;background:#000;border:1px solid var(--border);border-radius:4px;overflow:hidden;display:none}
+  .video-wrap.show{display:block}
+  #srcVideo{width:100%;display:block;opacity:0;position:absolute;top:0;left:0;pointer-events:none}
+  #outCanvas{width:100%;display:block}
+  .video-overlay{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+  .ov-badge{font-family:'Share Tech Mono',monospace;font-size:0.65rem;padding:3px 8px;border-radius:2px;border:1px solid}
+  .ov-fps{border-color:var(--accent3);color:var(--accent3);background:#000a}
+  .ov-proc{border-color:var(--warn);color:var(--warn);background:#000a}
+  .ov-det{border-color:var(--accent);color:var(--accent);background:#000a}
+
+  /* CONTROLS */
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{padding:8px 16px;border:1px solid;border-radius:3px;cursor:pointer;font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:2px;transition:all 0.2s;background:transparent;text-transform:uppercase}
+  .btn-play{border-color:var(--accent3);color:var(--accent3)}.btn-play:hover{background:#39ff1422}
+  .btn-pause{border-color:var(--warn);color:var(--warn)}.btn-pause:hover{background:#ffcc0022}
+  .btn-stop{border-color:var(--accent2);color:var(--accent2)}.btn-stop:hover{background:#ff6b3522}
+  .btn-reset{border-color:var(--dim);color:var(--dim)}.btn-reset:hover{background:#1a3a5522}
+  .btn-dl{border-color:var(--warn);color:var(--warn)}.btn-dl:hover{background:#ffcc0022}
+  .btn:disabled{opacity:0.3;cursor:not-allowed}
+
+  /* LINE SLIDER */
+  .line-ctrl{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:8px 12px}
+  .line-ctrl label{font-family:'Share Tech Mono',monospace;font-size:0.68rem;color:var(--dim);white-space:nowrap}
+  #lineSlider{flex:1;accent-color:var(--accent2)}
+  .line-val{font-family:'Share Tech Mono',monospace;font-size:0.68rem;color:var(--accent2);min-width:30px}
+
+  /* LANE CARDS */
+  .lane-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .lane-card{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:9px 11px;position:relative;overflow:hidden}
+  .lane-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+  .lane-card:nth-child(1)::before{background:var(--accent)}
+  .lane-card:nth-child(2)::before{background:var(--accent2)}
+  .lane-card:nth-child(3)::before{background:var(--accent3)}
+  .lane-card:nth-child(4)::before{background:var(--warn)}
+  .lane-label{font-family:'Orbitron',monospace;font-size:0.58rem;letter-spacing:2px;color:var(--dim)}
+  .lane-count{font-family:'Orbitron',monospace;font-size:1.8rem;font-weight:900;line-height:1;margin:3px 0}
+  .lane-card:nth-child(1) .lane-count{color:var(--accent);text-shadow:0 0 8px var(--accent)}
+  .lane-card:nth-child(2) .lane-count{color:var(--accent2);text-shadow:0 0 8px var(--accent2)}
+  .lane-card:nth-child(3) .lane-count{color:var(--accent3);text-shadow:0 0 8px var(--accent3)}
+  .lane-card:nth-child(4) .lane-count{color:var(--warn);text-shadow:0 0 8px var(--warn)}
+  .lane-spd{font-family:'Share Tech Mono',monospace;font-size:0.65rem;color:var(--dim)}
+
+  /* RIGHT PANEL */
+  .right-panel{display:flex;flex-direction:column;gap:12px}
+
+  /* LOG */
+  .log-panel{background:var(--panel);border:1px solid var(--border);border-radius:4px;display:flex;flex-direction:column}
+  .log-head{padding:9px 13px;border-bottom:1px solid var(--border);font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:2px;color:var(--accent);display:flex;justify-content:space-between;align-items:center}
+  .badge{background:var(--accent);color:#000;padding:2px 7px;border-radius:2px;font-size:0.62rem;font-weight:700}
+  .log-body{overflow-y:auto;max-height:260px;padding:6px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+  .log-row{display:grid;grid-template-columns:72px 36px 86px 58px 90px 1fr;gap:5px;padding:4px 5px;margin-bottom:2px;border-radius:2px;font-family:'Share Tech Mono',monospace;font-size:0.67rem;background:var(--panel2);border-left:2px solid transparent;animation:slideIn 0.25s ease;align-items:center}
+  .lp{color:var(--warn);font-size:0.62rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @keyframes slideIn{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+  .lt{color:var(--dim)}.ll{color:var(--warn)}.lc{font-weight:700}.ls{color:var(--accent3)}.li{color:#1a3a55;font-size:0.58rem}
+  .cls-Car{color:#00d4ff;border-color:#00d4ff44}
+  .cls-Motorcycle{color:#ff6b35;border-color:#ff6b3544}
+  .cls-Auto{color:#ffcc00;border-color:#ffcc0044}
+  .cls-Bus{color:#39ff14;border-color:#39ff1444}
+  .cls-TruckHGV{color:#ff4488;border-color:#ff448844}
+  .cls-LCVVan{color:#bb88ff;border-color:#bb88ff44}
+  .cls-Tractor{color:#ff9933;border-color:#ff993344}
+  .cls-Bicycle{color:#88ffee;border-color:#88ffee44}
+
+  /* CLASS BARS */
+  .stats-panel{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:13px}
+  .stats-title{font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:2px;color:var(--accent2);margin-bottom:11px}
+  .cbar{display:flex;flex-direction:column;gap:6px}
+  .cbar-row{display:grid;grid-template-columns:85px 1fr 36px;align-items:center;gap:7px;font-size:0.72rem}
+  .cname{color:var(--text);font-family:'Rajdhani',sans-serif;font-weight:600}
+  .track{background:#0d1e2e;height:7px;border-radius:2px;overflow:hidden}
+  .fill{height:100%;border-radius:2px;transition:width 0.4s ease}
+  .cnum{font-family:'Share Tech Mono',monospace;font-size:0.67rem;text-align:right}
+  .total-box{text-align:center;padding:8px;background:#0d1e2e;border:1px solid var(--border);border-radius:3px;margin-top:10px}
+  .total-lbl{font-size:0.62rem;color:var(--dim);font-family:'Share Tech Mono'}
+  .total-num{font-family:'Orbitron',monospace;font-size:1.9rem;font-weight:900;color:var(--accent);text-shadow:0 0 20px var(--accent);line-height:1}
+
+  /* PIPELINE */
+  .pipe-panel{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:13px}
+  .pipe-title{font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:2px;color:var(--accent3);margin-bottom:11px}
+  .pstep{display:flex;align-items:center;gap:9px;padding:4px 0;position:relative}
+  .pstep:not(:last-child)::after{content:'';position:absolute;left:10px;top:26px;width:2px;height:calc(100% - 8px);background:var(--border)}
+  .pdot{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:0.55rem;font-family:'Share Tech Mono',monospace;flex-shrink:0;transition:all 0.2s;z-index:1;background:var(--bg)}
+  .pdot.active{border-color:var(--accent3);color:var(--accent3);box-shadow:0 0 8px var(--accent3);background:#39ff1411}
+  .ptext{font-size:0.75rem;color:var(--dim);transition:color 0.2s;flex:1}
+  .pstep.active .ptext{color:var(--text)}
+  .pval{font-family:'Share Tech Mono',monospace;font-size:0.65rem;color:var(--accent3);min-width:75px;text-align:right}
+
+  /* DB */
+  .db-panel{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:13px}
+  .db-title{font-family:'Orbitron',monospace;font-size:0.62rem;letter-spacing:2px;color:var(--warn);margin-bottom:11px;display:flex;justify-content:space-between}
+  .db-tx{font-size:0.6rem;color:var(--accent3);animation:blink 0.8s infinite;display:none}
+  .db-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
+  .db-cell{background:#0d1e2e;border:1px solid var(--border);border-radius:3px;padding:7px 9px}
+  .db-clbl{font-size:0.62rem;color:var(--dim);font-family:'Share Tech Mono'}
+  .db-cval{font-family:'Orbitron',monospace;font-size:1rem;font-weight:700;color:var(--warn);margin-top:1px}
+  .db-log{font-family:'Share Tech Mono',monospace;font-size:0.62rem;color:var(--dim);background:#0d1e2e;padding:6px 9px;border-radius:3px;border:1px solid var(--border);word-break:break-all;max-height:60px;overflow-y:auto}
+
+  /* WS STATUS */
+  .ws-bar{display:flex;align-items:center;gap:8px;padding:6px 13px;background:#0d1e2e;border-bottom:1px solid var(--border);font-family:'Share Tech Mono',monospace;font-size:0.65rem;color:var(--dim)}
+  .ws-dot{width:7px;height:7px;border-radius:50%;background:#ff4444}
+  .ws-dot.connected{background:var(--accent3);animation:blink 2s infinite}
+
+  @media(max-width:900px){.main{grid-template-columns:1fr}.right-panel{display:grid;grid-template-columns:1fr 1fr;gap:12px}.lane-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">AVCC <span>//</span> GANTRY</div>
+  <div class="hbar">
+    <span class="pill pill-yellow" id="wsStatus">● DISCONNECTED</span>
+    <span class="pill pill-green" style="display:none" id="liveTag">● LIVE</span>
+    <span class="clock" id="clock">--:--:--</span>
+  </div>
+</header>
+
+<div class="ws-bar">
+  <div class="ws-dot" id="wsDot"></div>
+  <span id="wsMsg">Not connected — start the Python server then click Connect</span>
+  <button class="btn btn-play" style="padding:3px 10px;margin-left:auto;font-size:0.58rem" id="btnConnect">Connect</button>
+  <button class="btn btn-stop" style="padding:3px 10px;font-size:0.58rem;display:none" id="btnDisconnect">Disconnect</button>
+</div>
+
+<div class="main">
+
+  <!-- LEFT: VIDEO + CONTROLS -->
+  <div class="video-section">
+    <div class="section-label">Video Input — Upload Footage</div>
+
+    <!-- Upload zone (shown when no video) -->
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept="video/mp4,video/avi,video/mov,video/mkv,video/*">
+      <div class="upload-icon">📹</div>
+      <div class="upload-title">DROP VIDEO FILE HERE</div>
+      <div class="upload-sub">mp4 · avi · mov · mkv</div>
+    </div>
+
+    <!-- Video canvas (shown after upload) -->
+    <div class="video-wrap" id="videoWrap">
+      <video id="srcVideo" muted playsinline></video>
+      <canvas id="outCanvas"></canvas>
+      <div class="video-overlay">
+        <span class="ov-badge ov-fps" id="ovFps">-- fps</span>
+        <span class="ov-badge ov-proc" id="ovProc">-- ms</span>
+        <span class="ov-badge ov-det" id="ovDet">0 det</span>
+      </div>
+    </div>
+
+    <div class="controls" id="controls">
+      <button class="btn btn-play" id="btnPlay" disabled>▶ Play</button>
+      <button class="btn btn-pause" id="btnPause" disabled>⏸ Pause</button>
+      <button class="btn btn-stop" id="btnStop" disabled>■ Stop</button>
+      <button class="btn btn-reset" id="btnReset">↺ New Video</button>
+      <button class="btn btn-dl" id="btnDownload">⬇ Download Excel</button>
+    </div>
+
+    <div class="line-ctrl">
+      <label>COUNTING LINE:</label>
+      <input type="range" id="lineSlider" min="20" max="85" value="55">
+      <span class="line-val" id="lineVal">55%</span>
+    </div>
+
+    <div class="section-label" style="margin-top:4px">Lane Counts</div>
+    <div class="lane-grid">
+      <div class="lane-card"><div class="lane-label">LANE 1</div><div class="lane-count" id="lc0">0</div><div class="lane-spd" id="ls0">— km/h</div></div>
+      <div class="lane-card"><div class="lane-label">LANE 2</div><div class="lane-count" id="lc1">0</div><div class="lane-spd" id="ls1">— km/h</div></div>
+      <div class="lane-card"><div class="lane-label">LANE 3</div><div class="lane-count" id="lc2">0</div><div class="lane-spd" id="ls2">— km/h</div></div>
+      <div class="lane-card"><div class="lane-label">LANE 4</div><div class="lane-count" id="lc3">0</div><div class="lane-spd" id="ls3">— km/h</div></div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+
+    <!-- LOG -->
+    <div class="log-panel">
+      <div class="log-head">DETECTION LOG <span class="badge" id="logBadge">0</span></div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+
+    <!-- CLASS BARS -->
+    <div class="stats-panel">
+      <div class="stats-title">▸ CLASS DISTRIBUTION</div>
+      <div class="cbar" id="classBars"></div>
+      <div class="total-box">
+        <div class="total-lbl">TOTAL VEHICLES</div>
+        <div class="total-num" id="totalCount">0</div>
+      </div>
+    </div>
+
+    <!-- PIPELINE -->
+    <div class="pipe-panel">
+      <div class="pipe-title">▸ PROCESSING PIPELINE</div>
+      <div id="pipelineEl">
+        <div class="pstep" data-s="0"><div class="pdot">1</div><span class="ptext">Vehicle passes under gantry</span><span class="pval" id="pv0"></span></div>
+        <div class="pstep" data-s="1"><div class="pdot">2</div><span class="ptext">Frame captured from video</span><span class="pval" id="pv1"></span></div>
+        <div class="pstep" data-s="2"><div class="pdot">3</div><span class="ptext">YOLOv8 object detection</span><span class="pval" id="pv2"></span></div>
+        <div class="pstep" data-s="3"><div class="pdot">4</div><span class="ptext">Centroid tracker assigned</span><span class="pval" id="pv3"></span></div>
+        <div class="pstep" data-s="4"><div class="pdot">5</div><span class="ptext">Counting line crossed</span><span class="pval" id="pv4"></span></div>
+        <div class="pstep" data-s="5"><div class="pdot">6</div><span class="ptext">Class refined (Indian)</span><span class="pval" id="pv5"></span></div>
+        <div class="pstep" data-s="6"><div class="pdot">7</div><span class="ptext">Speed calculated</span><span class="pval" id="pv6"></span></div>
+        <div class="pstep" data-s="7"><div class="pdot">8</div><span class="ptext">Record logged</span><span class="pval" id="pv7"></span></div>
+        <div class="pstep" data-s="8"><div class="pdot">9</div><span class="ptext">Transmitted to DB</span><span class="pval" id="pv8"></span></div>
+      </div>
+    </div>
+
+    <!-- DB -->
+    <div class="db-panel">
+      <div class="db-title">▸ CENTRAL DATABASE <span class="db-tx" id="dbTx">● TX</span></div>
+      <div class="db-grid">
+        <div class="db-cell"><div class="db-clbl">RECORDS</div><div class="db-cval" id="dbRec">0</div></div>
+        <div class="db-cell"><div class="db-clbl">PACKETS</div><div class="db-cval" id="dbPkt">0</div></div>
+        <div class="db-cell"><div class="db-clbl">FLOW veh/hr</div><div class="db-cval" id="dbFlow">0</div></div>
+        <div class="db-cell"><div class="db-clbl">AVG SPEED</div><div class="db-cval" id="dbAvg">—</div></div>
+      </div>
+      <div class="db-log" id="dbLog">Awaiting transmission...</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// =====================================================
+// CONFIG
+// =====================================================
+// Auto-detect host — works on localhost AND deployed (Railway, etc.)
+const _proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${_proto}//${location.host}/ws/`;
+const FRAME_INTERVAL_MS = 100;   // send a frame every 100ms (10 fps to server)
+const CANVAS_W = 1280;
+const CANVAS_H = 720;
+
+const CLASS_INFO = {
+  'Car':       {color:'#00d4ff', icon:'🚗'},
+  'Motorcycle':{color:'#ff6b35', icon:'🏍'},
+  'Auto':      {color:'#ffcc00', icon:'🛺'},
+  'Bus':       {color:'#39ff14', icon:'🚌'},
+  'Truck/HGV': {color:'#ff4488', icon:'🚛'},
+  'LCV/Van':   {color:'#bb88ff', icon:'🚐'},
+  'Tractor':   {color:'#ff9933', icon:'🚜'},
+  'Bicycle':   {color:'#88ffee', icon:'🚲'},
+};
+
+// =====================================================
+// STATE
+// =====================================================
+let ws = null;
+let wsConnected = false;
+let sessionId = null;
+let playing = false;
+let logEntries = [];
+let classCounts = {};
+let dbPackets = 0;
+let dbRecords = 0;
+let allSpeeds = [];
+let startTime = null;
+let frameTimer = null;
+let lastFrameTime = 0;
+let fpsCounter = 0;
+let fpsTimer = 0;
+let dispFps = 0;
+
+// DOM refs
+const video     = document.getElementById('srcVideo');
+const outCanvas = document.getElementById('outCanvas');
+const octx      = outCanvas.getContext('2d');
+const fileInput = document.getElementById('fileInput');
+const uploadZone= document.getElementById('uploadZone');
+const videoWrap = document.getElementById('videoWrap');
+
+outCanvas.width  = CANVAS_W;
+outCanvas.height = CANVAS_H;
+
+// =====================================================
+// CLOCK
+// =====================================================
+setInterval(()=>{ document.getElementById('clock').textContent = new Date().toTimeString().substr(0,8); }, 500);
+
+// =====================================================
+// WEBSOCKET
+// =====================================================
+document.getElementById('btnConnect').addEventListener('click', connectWS);
+document.getElementById('btnDisconnect').addEventListener('click', disconnectWS);
+
+function disconnectWS() {
+  if (playing) {
+    video.pause();
+    playing = false;
+    stopFrameSending();
+    document.getElementById('liveTag').style.display = 'none';
+  }
+  if (ws) { ws.close(); ws = null; }
+  wsConnected = false;
+  sessionId = null;
+  setWsStatus(false);
+  document.getElementById('btnPlay').disabled = true;
+  document.getElementById('btnPause').disabled = true;
+}
+
+function connectWS() {
+  if (ws) { ws.close(); ws = null; }
+  sessionId = 'sess_' + Math.random().toString(36).substr(2,8);
+  ws = new WebSocket(WS_URL + sessionId);
+
+  ws.onopen = () => {
+    wsConnected = true;
+    setWsStatus(true);
+    // Send config
+    ws.send(JSON.stringify({
+      type: 'config',
+      width: CANVAS_W, height: CANVAS_H,
+      fps: 25,
+      counting_line_y: parseInt(document.getElementById('lineSlider').value) / 100,
+    }));
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'config_ack') {
+      console.log('✅ Server config acknowledged');
+      enableControls();
+    }
+    if (msg.type === 'result') handleResult(msg);
+  };
+
+  ws.onerror = () => { setWsStatus(false); console.warn('WS error'); };
+  ws.onclose = () => { wsConnected = false; setWsStatus(false); stopFrameSending(); };
+}
+
+function setWsStatus(connected) {
+  const dot = document.getElementById('wsDot');
+  const lbl = document.getElementById('wsMsg');
+  const pill= document.getElementById('wsStatus');
+  const btnConn = document.getElementById('btnConnect');
+  const btnDisc = document.getElementById('btnDisconnect');
+  if (connected) {
+    dot.classList.add('connected');
+    lbl.textContent = 'Connected to server — ready to process video';
+    pill.textContent = '● CONNECTED';
+    pill.className = 'pill pill-green';
+    btnConn.style.display = 'none';
+    btnDisc.style.display = '';
+  } else {
+    dot.classList.remove('connected');
+    lbl.textContent = 'Disconnected — is the Python server running? (python server.py)';
+    pill.textContent = '● DISCONNECTED';
+    pill.className = 'pill pill-yellow';
+    btnConn.style.display = '';
+    btnDisc.style.display = 'none';
+  }
+}
+
+// =====================================================
+// FILE UPLOAD
+// =====================================================
+fileInput.addEventListener('change', e => loadVideo(e.target.files[0]));
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) loadVideo(e.dataTransfer.files[0]);
+});
+
+function loadVideo(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  video.src = url;
+  video.load();
+  video.onloadedmetadata = () => {
+    uploadZone.style.display = 'none';
+    videoWrap.classList.add('show');
+    enableControls();
+    drawIdleFrame();
+  };
+}
+
+function drawIdleFrame() {
+  octx.fillStyle = '#020810';
+  octx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  octx.fillStyle = '#1a3a55';
+  octx.font = '14px Orbitron, monospace';
+  octx.textAlign = 'center';
+  octx.fillText('VIDEO LOADED — CLICK PLAY', CANVAS_W/2, CANVAS_H/2);
+  octx.font = '11px Share Tech Mono, monospace';
+  octx.fillStyle = '#4a7a99';
+  octx.fillText('Make sure server is connected first', CANVAS_W/2, CANVAS_H/2+28);
+}
+
+function enableControls() {
+  const hasVideo = !!video.src;
+  document.getElementById('btnPlay').disabled  = !hasVideo;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('btnStop').disabled  = !hasVideo;
+}
+
+// =====================================================
+// PLAYBACK CONTROLS
+// =====================================================
+document.getElementById('btnPlay').addEventListener('click', () => {
+  if (!wsConnected) { alert('Connect to the server first!'); return; }
+  video.play();
+  playing = true;
+  startTime = Date.now();
+  document.getElementById('btnPlay').disabled  = true;
+  document.getElementById('btnPause').disabled = false;
+  document.getElementById('btnStop').disabled  = false;
+  document.getElementById('liveTag').style.display = 'inline';
+  startFrameSending();
+});
+
+document.getElementById('btnPause').addEventListener('click', () => {
+  video.pause();
+  playing = false;
+  stopFrameSending();
+  document.getElementById('btnPlay').disabled  = false;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('liveTag').style.display = 'none';
+});
+
+document.getElementById('btnStop').addEventListener('click', () => {
+  video.pause();
+  video.currentTime = 0;
+  playing = false;
+  stopFrameSending();
+  document.getElementById('btnPlay').disabled  = false;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('liveTag').style.display = 'none';
+  drawIdleFrame();
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  video.pause();
+  playing = false;
+  stopFrameSending();
+  video.src = '';
+  uploadZone.style.display = '';
+  videoWrap.classList.remove('show');
+  fileInput.value = '';
+  document.getElementById('btnPlay').disabled = true;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('liveTag').style.display = 'none';
+  resetStats();
+});
+
+document.getElementById('btnDownload').addEventListener('click', () => {
+  if (!sessionId) { alert('Connect to the server first!'); return; }
+  window.open(`${location.origin}/download/${sessionId}`, '_blank');
+});
+
+video.addEventListener('ended', () => {
+  playing = false;
+  stopFrameSending();
+  document.getElementById('btnPlay').disabled  = false;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('liveTag').style.display = 'none';
+});
+
+// =====================================================
+// COUNTING LINE SLIDER
+// =====================================================
+document.getElementById('lineSlider').addEventListener('input', function() {
+  document.getElementById('lineVal').textContent = this.value + '%';
+  if (wsConnected && ws) {
+    ws.send(JSON.stringify({
+      type: 'config',
+      width: CANVAS_W, height: CANVAS_H,
+      fps: 25,
+      counting_line_y: parseInt(this.value) / 100,
+    }));
+  }
+});
+
+// =====================================================
+// FRAME SENDING
+// =====================================================
+const tmpCanvas = document.createElement('canvas');
+tmpCanvas.width = CANVAS_W;
+tmpCanvas.height = CANVAS_H;
+const tmpCtx = tmpCanvas.getContext('2d');
+
+function startFrameSending() {
+  if (frameTimer) return;
+  frameTimer = setInterval(sendFrame, FRAME_INTERVAL_MS);
+}
+
+function stopFrameSending() {
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+}
+
+function sendFrame() {
+  if (!playing || !wsConnected || !ws || video.readyState < 2) return;
+  if (ws.bufferedAmount > 500000) return;  // backpressure
+
+  tmpCtx.drawImage(video, 0, 0, CANVAS_W, CANVAS_H);
+  const b64 = tmpCanvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+
+  ws.send(JSON.stringify({
+    type: 'frame',
+    data: b64,
+    frame_time: video.currentTime,
+  }));
+}
+
+// =====================================================
+// HANDLE RESULTS
+// =====================================================
+let pipelineQueue = [];
+let pipelineRunning = false;
+
+function handleResult(msg) {
+  // Draw annotated frame
+  if (msg.frame) {
+    const img = new Image();
+    img.onload = () => {
+      octx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+    };
+    img.src = 'data:image/jpeg;base64,' + msg.frame;
+  }
+
+  // FPS counter
+  fpsCounter++;
+  const now = Date.now();
+  if (now - fpsTimer > 1000) {
+    dispFps = fpsCounter;
+    fpsCounter = 0;
+    fpsTimer = now;
+  }
+
+  document.getElementById('ovFps').textContent  = dispFps + ' fps';
+  document.getElementById('ovProc').textContent = msg.proc_ms + ' ms';
+  document.getElementById('ovDet').textContent  = msg.detections + ' det';
+
+  // Update counts
+  if (msg.class_counts) {
+    classCounts = msg.class_counts;
+  }
+
+  // Lane stats
+  for (let i=0;i<4;i++) {
+    document.getElementById(`lc${i}`).textContent = msg.lane_counts[i] || 0;
+    const spd = msg.lane_avg_speed[i];
+    document.getElementById(`ls${i}`).textContent = spd ? spd + ' km/h' : '— km/h';
+  }
+
+  document.getElementById('totalCount').textContent = msg.total;
+
+  // New crossing events → log + pipeline
+  if (msg.events && msg.events.length > 0) {
+    msg.events.forEach(ev => {
+      allSpeeds.push(ev.speed);
+      logEntries.unshift(ev);
+      if (logEntries.length > 300) logEntries.pop();
+      pipelineQueue.push(ev);
+    });
+    updateLog();
+    updateClassBars();
+    if (!pipelineRunning) runPipeline();
+  }
+
+  // DB flush
+  if (msg.db_flush) {
+    dbPackets++;
+    dbRecords += msg.db_flush.batch_size;
+    document.getElementById('dbRec').textContent = dbRecords;
+    document.getElementById('dbPkt').textContent = dbPackets;
+    const tx = document.getElementById('dbTx');
+    tx.style.display = 'inline';
+    setTimeout(()=>tx.style.display='none', 500);
+    document.getElementById('dbLog').textContent = JSON.stringify(msg.db_flush).substr(0,220);
+
+    // Flow
+    if (startTime) {
+      const hr = (Date.now() - startTime) / 3600000;
+      document.getElementById('dbFlow').textContent = hr>0 ? Math.round(msg.total/hr) : 0;
+    }
+    if (allSpeeds.length>0) {
+      const avg = Math.round(allSpeeds.reduce((a,b)=>a+b,0)/allSpeeds.length);
+      document.getElementById('dbAvg').textContent = avg + ' km/h';
+    }
+  }
+}
+
+// =====================================================
+// LOG
+// =====================================================
+function updateLog() {
+  document.getElementById('logBadge').textContent = logEntries.length;
+  const lb = document.getElementById('logBody');
+  lb.innerHTML = logEntries.slice(0,80).map((e,i) => {
+    const clsKey = (e.class||'').replace(/[^a-zA-Z]/g,'');
+    const plate = e.plate || '—';
+    return `<div class="log-row ${i===0?'new':''} cls-${clsKey}">
+      <span class="lt">${e.time}</span>
+      <span class="ll">L${e.lane}</span>
+      <span class="lc">${e.class}</span>
+      <span class="ls">${e.speed}km/h</span>
+      <span class="lp" title="${plate}">${plate}</span>
+      <span class="li">${e.id}</span>
+    </div>`;
+  }).join('');
+}
+
+// =====================================================
+// CLASS BARS
+// =====================================================
+function updateClassBars() {
+  const entries = Object.entries(CLASS_INFO);
+  const max = Math.max(1, ...Object.values(classCounts));
+  document.getElementById('classBars').innerHTML = entries.map(([k,v]) => {
+    const n = classCounts[k] || 0;
+    const pct = Math.round((n/max)*100);
+    return `<div class="cbar-row">
+      <span class="cname">${v.icon} ${k}</span>
+      <div class="track"><div class="fill" style="width:${pct}%;background:${v.color}"></div></div>
+      <span class="cnum" style="color:${v.color}">${n}</span>
+    </div>`;
+  }).join('');
+}
+
+// Initialise bars
+updateClassBars();
+
+// =====================================================
+// PIPELINE ANIMATION
+// =====================================================
+function runPipeline() {
+  if (pipelineQueue.length === 0) { pipelineRunning = false; return; }
+  pipelineRunning = true;
+  const ev = pipelineQueue.shift();
+  const steps = [
+    `Lane ${ev.lane}`,
+    `${(1000/FRAME_INTERVAL_MS).toFixed(0)} fps`,
+    `${ev.conf}% conf`,
+    ev.id,
+    `COUNT +1`,
+    ev.class,
+    `${ev.speed} km/h`,
+    ev.id,
+    `TX OK`,
+  ];
+  animStep(0, steps);
+}
+
+function animStep(i, steps) {
+  document.querySelectorAll('.pstep').forEach((el,idx)=>{
+    el.classList.toggle('active', idx===i);
+    el.querySelector('.pdot').classList.toggle('active', idx===i);
+  });
+  document.getElementById(`pv${i}`).textContent = steps[i];
+  if (i < 8) setTimeout(()=>animStep(i+1,steps), 100);
+  else setTimeout(runPipeline, 200);
+}
+
+// =====================================================
+// RESET
+// =====================================================
+function resetStats() {
+  logEntries = []; classCounts = {}; allSpeeds = [];
+  dbPackets = 0; dbRecords = 0; startTime = null;
+  for(let i=0;i<4;i++){
+    document.getElementById(`lc${i}`).textContent='0';
+    document.getElementById(`ls${i}`).textContent='— km/h';
+  }
+  document.getElementById('totalCount').textContent='0';
+  document.getElementById('logBadge').textContent='0';
+  document.getElementById('logBody').innerHTML='';
+  document.getElementById('dbRec').textContent='0';
+  document.getElementById('dbPkt').textContent='0';
+  document.getElementById('dbFlow').textContent='0';
+  document.getElementById('dbAvg').textContent='—';
+  document.getElementById('dbLog').textContent='Awaiting transmission...';
+  updateClassBars();
+}
+</script>
+</body>
+</html>
