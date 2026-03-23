@@ -36,13 +36,28 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ── YOLOv8 ────────────────────────────────────────────────
+import os as _os
+_YOLO_ERROR = None
 try:
     from ultralytics import YOLO
-    model = YOLO("yolov8n.pt")   # downloads automatically on first run (~6 MB)
+    # Use absolute path relative to this script file
+    _model_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "yolov8n.pt")
+    _model_exists = _os.path.exists(_model_path)
+    print(f"📁 Model path: {_model_path}, exists: {_model_exists}")
+    if not _model_exists:
+        # Fallback: let ultralytics download it
+        _model_path = "yolov8n.pt"
+        print("📥 Model not found locally, will download...")
+    model = YOLO(_model_path)
+    # Warm up with a dummy inference to catch any runtime errors
+    import numpy as _np
+    model(_np.zeros((64, 64, 3), dtype=_np.uint8), verbose=False)
     YOLO_AVAILABLE = True
-    print("✅ YOLOv8 loaded successfully")
+    print("✅ YOLOv8 loaded and verified successfully")
 except Exception as e:
-    print(f"⚠️  YOLOv8 not available: {e}")
+    import traceback
+    _YOLO_ERROR = f"{e}\n{traceback.format_exc()}"
+    print(f"⚠️  YOLOv8 not available: {_YOLO_ERROR}")
     YOLO_AVAILABLE = False
     model = None
 
@@ -253,7 +268,15 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "yolo": YOLO_AVAILABLE, "ocr": OCR_AVAILABLE, "time": datetime.now().isoformat()}
+    return {
+        "status": "ok",
+        "yolo": YOLO_AVAILABLE,
+        "yolo_error": _YOLO_ERROR if not YOLO_AVAILABLE else None,
+        "ocr": OCR_AVAILABLE,
+        "time": datetime.now().isoformat(),
+        "cwd": os.getcwd(),
+        "files": os.listdir(os.path.dirname(os.path.abspath(__file__))),
+    }
 
 # ── Per-session State ─────────────────────────────────────
 class SessionState:
