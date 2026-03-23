@@ -67,26 +67,30 @@ except Exception as e:
     YOLO_AVAILABLE = False
     model = None
 
-# ── EasyOCR (loaded in background so server starts fast) ──
+# ── EasyOCR ──
+# Only load on localhost (needs ~200MB extra RAM, Railway's 512MB can't handle it)
 import threading
 OCR_AVAILABLE = False
 plate_reader = None
 _ocr_lock = threading.Lock()
+_IS_RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("PORT")
 
-def _load_ocr():
-    global plate_reader, OCR_AVAILABLE
-    try:
-        import easyocr
-        reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-        with _ocr_lock:
-            plate_reader = reader
-            OCR_AVAILABLE = True
-        print("✅ EasyOCR loaded successfully (background)")
-    except Exception as e:
-        print(f"⚠️  EasyOCR not available: {e}")
-
-threading.Thread(target=_load_ocr, daemon=True).start()
-print("⏳ EasyOCR loading in background...")
+if _IS_RAILWAY:
+    print("☁️ Railway detected — skipping EasyOCR to save RAM")
+else:
+    def _load_ocr():
+        global plate_reader, OCR_AVAILABLE
+        try:
+            import easyocr
+            reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            with _ocr_lock:
+                plate_reader = reader
+                OCR_AVAILABLE = True
+            print("✅ EasyOCR loaded successfully")
+        except Exception as e:
+            print(f"⚠️  EasyOCR not available: {e}")
+    threading.Thread(target=_load_ocr, daemon=True).start()
+    print("⏳ EasyOCR loading in background...")
 
 # Indian number plate pattern: XX 00 XX 0000
 # Strict: must have state code (2 letters), district (1-2 digits), series (1-3 letters), number (4 digits)
@@ -557,8 +561,6 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 light_mode = msg.get("light", False)
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:11]
 
-                print(f"📷 Frame received: {len(frame_b64)//1024}KB, light={light_mode}, time={frame_time:.2f}")
-
                 # Decode frame
                 img_bytes = base64.b64decode(frame_b64)
                 arr = np.frombuffer(img_bytes, np.uint8)
@@ -567,37 +569,50 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 if frame is None:
                     print("⚠️ Frame decode failed!")
                     continue
-                print(f"📐 Frame decoded: {frame.shape[1]}x{frame.shape[0]}")
 
-                state.frame_w = frame.shape[1]
-                state.frame_h = frame.shape[0]
+                orig_h, orig_w = frame.shape[:2]
+                state.frame_w = orig_w
+                state.frame_h = orig_h
+
+                # On constrained servers, resize to 640x480 for YOLO
+                # then scale boxes back to original coordinates
+                det_frame = frame
+                scale_x, scale_y = 1.0, 1.0
+                if _IS_RAILWAY and (orig_w > 700 or orig_h > 500):
+                    det_w, det_h = 640, 480
+                    det_frame = cv2.resize(frame, (det_w, det_h))
+                    scale_x = orig_w / det_w
+                    scale_y = orig_h / det_h
 
                 detections = []
 
                 if YOLO_AVAILABLE and model:
-                    # imgsz=480 reduces memory usage on constrained servers
-                    results = model(frame, verbose=False, conf=0.40, imgsz=480)[0]
+                    results = model(det_frame, verbose=False, conf=0.35, imgsz=640)[0]
                     for box in results.boxes:
                         cls_id = int(box.cls[0])
                         cls_name = results.names[cls_id].lower()
                         if cls_name not in TARGET_CLASSES:
                             continue
                         x1,y1,x2,y2 = map(int, box.xyxy[0].tolist())
+                        # Scale back to original frame coordinates
+                        x1 = int(x1 * scale_x)
+                        y1 = int(y1 * scale_y)
+                        x2 = int(x2 * scale_x)
+                        y2 = int(y2 * scale_y)
                         w = x2 - x1
                         h = y2 - y1
                         area = w * h
                         conf = float(box.conf[0])
-                        # Use lower area threshold for two-wheelers
                         is_twowheeler = cls_name in ("motorcycle", "bicycle")
                         min_area = MIN_TWOWHEELER_AREA if is_twowheeler else MIN_DETECTION_AREA
                         if area < min_area:
-                            continue  # skip tiny noise detections
-                        # For non-bike classes, require higher confidence
-                        if not is_twowheeler and conf < 0.50:
+                            continue
+                        if not is_twowheeler and conf < 0.45:
                             continue
                         refined = refine_class(cls_name, w, h, area)
                         detections.append({"bbox":[x1,y1,x2,y2], "cls":refined, "conf":conf})
-                    print(f"🔍 YOLO: {len(detections)} detections in {round((time.time()-t0)*1000)}ms")
+                    # Free detection frame memory
+                    del det_frame, results
                 else:
                     print("⚠️ YOLO not available, skipping detection")
 

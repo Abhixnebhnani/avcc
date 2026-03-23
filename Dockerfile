@@ -14,9 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt && \
     pip uninstall -y opencv-python 2>/dev/null; \
     pip install --no-cache-dir --force-reinstall opencv-python-headless>=4.9.0.80
 
-# Pre-download EasyOCR models during build (so startup is fast)
-RUN python3 -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=True)" || true
-
 COPY . .
 
 EXPOSE 8000
