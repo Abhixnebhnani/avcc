@@ -1,11 +1,11 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.11.0+cpu
 torchvision==0.26.0+cpu
+opencv-python-headless>=4.9.0.80
+numpy==1.26.4
 fastapi==0.111.0
 uvicorn==0.29.0
 ultralytics==8.2.0
-opencv-python-headless==4.9.0.80
-numpy==1.26.4
 python-multipart==0.0.9
 websockets==12.0
 easyocr>=1.7.1
