@@ -675,7 +675,7 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
         sessions.pop(session_id, None)
 
 
-@app.post("/test-detect")
+@app.get("/test-detect")
 async def test_detect():
     """Quick test: generate a dummy frame and run YOLO to verify detection works."""
     import psutil
