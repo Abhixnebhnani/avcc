@@ -35,11 +35,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-# ── YOLOv8 ────────────────────────────────────────────────
+# ── Shared ────────────────────────────────────────────────
+import os
 import os as _os
+import threading
 
 # Fix for PyTorch >= 2.6: weights_only=True breaks older .pt files
-# Patch torch.load to allow unsafe loading for YOLO weights
 import torch as _torch
 _original_torch_load = _torch.load
 def _patched_torch_load(*args, **kwargs):
@@ -48,33 +49,40 @@ def _patched_torch_load(*args, **kwargs):
     return _original_torch_load(*args, **kwargs)
 _torch.load = _patched_torch_load
 
+_IS_RAILWAY = _os.environ.get("RAILWAY_ENVIRONMENT") or _os.environ.get("PORT")
+
+# ── YOLOv8 (loaded in background so server starts instantly) ──
 _YOLO_ERROR = None
-try:
-    from ultralytics import YOLO
-    _model_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "yolov8n.pt")
-    if not _os.path.exists(_model_path):
-        _model_path = "yolov8n.pt"
-    model = YOLO(_model_path)
-    # Warm up
-    import numpy as _np
-    model(_np.zeros((64, 64, 3), dtype=_np.uint8), verbose=False)
-    YOLO_AVAILABLE = True
-    print("✅ YOLOv8 loaded and verified successfully")
-except Exception as e:
-    import traceback
-    _YOLO_ERROR = f"{e}\n{traceback.format_exc()}"
-    print(f"⚠️  YOLOv8 not available: {_YOLO_ERROR}")
-    YOLO_AVAILABLE = False
-    model = None
+YOLO_AVAILABLE = False
+model = None
+_yolo_lock = threading.Lock()
+
+def _load_yolo():
+    global model, YOLO_AVAILABLE, _YOLO_ERROR
+    try:
+        from ultralytics import YOLO as _YOLO
+        _model_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "yolov8n.pt")
+        if not _os.path.exists(_model_path):
+            _model_path = "yolov8n.pt"
+        _m = _YOLO(_model_path)
+        _m(np.zeros((64, 64, 3), dtype=np.uint8), verbose=False)
+        with _yolo_lock:
+            model = _m
+            YOLO_AVAILABLE = True
+        print("✅ YOLOv8 loaded and verified successfully")
+    except Exception as e:
+        import traceback as _tb
+        _YOLO_ERROR = f"{e}\n{_tb.format_exc()}"
+        print(f"⚠️  YOLOv8 not available: {_YOLO_ERROR}")
+
+threading.Thread(target=_load_yolo, daemon=True).start()
+print("⏳ YOLOv8 loading in background...")
 
 # ── EasyOCR ──
 # Only load on localhost (needs ~200MB extra RAM, Railway's 512MB can't handle it)
-import threading
 OCR_AVAILABLE = False
 plate_reader = None
 _ocr_lock = threading.Lock()
-_IS_RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("PORT")
-
 if _IS_RAILWAY:
     print("☁️ Railway detected — skipping EasyOCR to save RAM")
 else:
