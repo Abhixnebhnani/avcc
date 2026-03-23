@@ -273,12 +273,12 @@
 const _proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_URL = `${_proto}//${location.host}/ws/`;
 const IS_REMOTE = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
-// Remote: send smaller frames, use light mode (JSON metadata, no annotated image)
-// Local: send full res, get annotated frame back
-const CANVAS_W = IS_REMOTE ? 640 : 1280;
-const CANVAS_H = IS_REMOTE ? 360 : 720;
-const FRAME_INTERVAL_MS = IS_REMOTE ? 50 : 100;  // min interval between sends
-const LIGHT_MODE = IS_REMOTE;  // true = server sends box coords, client draws them
+// Both modes send full resolution — light mode saves bandwidth on the RESPONSE
+// (JSON metadata vs full annotated JPEG), so upload size is fine
+const CANVAS_W = 1280;
+const CANVAS_H = 720;
+const FRAME_INTERVAL_MS = 50;   // min interval between sends
+const LIGHT_MODE = IS_REMOTE;   // true = server sends box coords, client draws them
 
 const CLASS_INFO = {
   'Car':       {color:'#00d4ff', icon:'🚗'},
@@ -569,7 +569,7 @@ function trySendFrame() {
   if (ws.bufferedAmount > 200000) return;
 
   tmpCtx.drawImage(video, 0, 0, CANVAS_W, CANVAS_H);
-  const quality = IS_REMOTE ? 0.65 : 0.92;
+  const quality = 0.85;
   const b64 = tmpCanvas.toDataURL('image/jpeg', quality).split(',')[1];
 
   waitingForResponse = true;
