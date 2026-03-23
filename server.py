@@ -512,6 +512,7 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 t0 = time.time()
                 frame_b64 = msg.get("data", "")
                 frame_time = msg.get("frame_time", time.time())
+                light_mode = msg.get("light", False)
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:11]
 
                 # Decode frame
@@ -560,11 +561,6 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 # Count (pass frame for plate reading)
                 events = check_counting_line(state, trackers, timestamp, frame)
 
-                # Annotate frame
-                annotated = annotate_frame(frame, state, trackers)
-                _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                out_b64 = base64.b64encode(buf).decode()
-
                 # Build response
                 proc_ms = round((time.time() - t0) * 1000, 1)
 
@@ -587,9 +583,8 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                     }
                     state.db_buffer.clear()
 
-                await ws.send_text(json.dumps({
+                resp = {
                     "type":        "result",
-                    "frame":       out_b64,
                     "detections":  len(detections),
                     "events":      events,
                     "total":       state.total,
@@ -598,7 +593,27 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                     "lane_avg_speed": lane_avg,
                     "proc_ms":     proc_ms,
                     "db_flush":    db_flush,
-                }))
+                }
+
+                if light_mode:
+                    # Light mode: send tracker metadata for client-side drawing
+                    boxes = []
+                    for tid, tr in trackers.items():
+                        boxes.append({
+                            "bbox": tr["bbox"],
+                            "cls": tr["cls"],
+                            "speed": round(tr["speed"], 1),
+                            "counted": tr.get("counted", False),
+                        })
+                    resp["boxes"] = boxes
+                    resp["line_y"] = state.counting_line_y
+                else:
+                    # Full mode: send annotated frame image
+                    annotated = annotate_frame(frame, state, trackers)
+                    _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    resp["frame"] = base64.b64encode(buf).decode()
+
+                await ws.send_text(json.dumps(resp))
 
     except WebSocketDisconnect:
         print(f"🔌 Session disconnected: {session_id}")

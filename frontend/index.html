@@ -45,8 +45,8 @@
   /* VIDEO PLAYER */
   .video-wrap{position:relative;background:#000;border:1px solid var(--border);border-radius:4px;overflow:hidden;display:none}
   .video-wrap.show{display:block}
-  #srcVideo{width:100%;display:block;opacity:0;position:absolute;top:0;left:0;pointer-events:none}
-  #outCanvas{width:100%;display:block}
+  #srcVideo{width:100%;display:block}
+  #overlayCanvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
   .video-overlay{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
   .ov-badge{font-family:'Share Tech Mono',monospace;font-size:0.65rem;padding:3px 8px;border-radius:2px;border:1px solid}
   .ov-fps{border-color:var(--accent3);color:var(--accent3);background:#000a}
@@ -183,7 +183,8 @@
     <!-- Video canvas (shown after upload) -->
     <div class="video-wrap" id="videoWrap">
       <video id="srcVideo" muted playsinline></video>
-      <canvas id="outCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+      <canvas id="outCanvas" style="display:none"></canvas>
       <div class="video-overlay">
         <span class="ov-badge ov-fps" id="ovFps">-- fps</span>
         <span class="ov-badge ov-proc" id="ovProc">-- ms</span>
@@ -271,9 +272,13 @@
 // Auto-detect host — works on localhost AND deployed (Railway, etc.)
 const _proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_URL = `${_proto}//${location.host}/ws/`;
-const FRAME_INTERVAL_MS = 100;   // send a frame every 100ms (10 fps to server)
-const CANVAS_W = 1280;
-const CANVAS_H = 720;
+const IS_REMOTE = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
+// Remote: send smaller frames, use light mode (JSON metadata, no annotated image)
+// Local: send full res, get annotated frame back
+const CANVAS_W = IS_REMOTE ? 640 : 1280;
+const CANVAS_H = IS_REMOTE ? 360 : 720;
+const FRAME_INTERVAL_MS = IS_REMOTE ? 50 : 100;  // min interval between sends
+const LIGHT_MODE = IS_REMOTE;  // true = server sends box coords, client draws them
 
 const CLASS_INFO = {
   'Car':       {color:'#00d4ff', icon:'🚗'},
@@ -306,15 +311,22 @@ let fpsTimer = 0;
 let dispFps = 0;
 
 // DOM refs
-const video     = document.getElementById('srcVideo');
-const outCanvas = document.getElementById('outCanvas');
-const octx      = outCanvas.getContext('2d');
-const fileInput = document.getElementById('fileInput');
-const uploadZone= document.getElementById('uploadZone');
-const videoWrap = document.getElementById('videoWrap');
+const video       = document.getElementById('srcVideo');
+const outCanvas   = document.getElementById('outCanvas');
+const octx        = outCanvas.getContext('2d');
+const overlay     = document.getElementById('overlayCanvas');
+const ovctx       = overlay.getContext('2d');
+const fileInput   = document.getElementById('fileInput');
+const uploadZone  = document.getElementById('uploadZone');
+const videoWrap   = document.getElementById('videoWrap');
 
 outCanvas.width  = CANVAS_W;
 outCanvas.height = CANVAS_H;
+
+// Track if we're waiting for server response (adaptive rate control)
+let waitingForResponse = false;
+let lastBoxes = [];  // latest detection boxes from server
+let lastLineY = 0.55;
 
 // =====================================================
 // CLOCK
@@ -421,6 +433,10 @@ function loadVideo(file) {
 }
 
 function drawIdleFrame() {
+  if (LIGHT_MODE) return;  // video element is visible, no need for idle frame
+  outCanvas.style.display = 'block';
+  video.style.position = 'absolute';
+  video.style.opacity = '0';
   octx.fillStyle = '#020810';
   octx.fillRect(0,0,CANVAS_W,CANVAS_H);
   octx.fillStyle = '#1a3a55';
@@ -517,7 +533,7 @@ document.getElementById('lineSlider').addEventListener('input', function() {
 });
 
 // =====================================================
-// FRAME SENDING
+// FRAME SENDING (adaptive: wait for response before next)
 // =====================================================
 const tmpCanvas = document.createElement('canvas');
 tmpCanvas.width = CANVAS_W;
@@ -526,25 +542,88 @@ const tmpCtx = tmpCanvas.getContext('2d');
 
 function startFrameSending() {
   if (frameTimer) return;
-  frameTimer = setInterval(sendFrame, FRAME_INTERVAL_MS);
+  frameTimer = setInterval(trySendFrame, FRAME_INTERVAL_MS);
+  // Also start overlay draw loop for light mode
+  if (LIGHT_MODE) requestAnimationFrame(drawOverlayLoop);
 }
 
 function stopFrameSending() {
   if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
 }
 
-function sendFrame() {
+function trySendFrame() {
   if (!playing || !wsConnected || !ws || video.readyState < 2) return;
-  if (ws.bufferedAmount > 500000) return;  // backpressure
+  if (waitingForResponse) return;  // still waiting for previous response
+  if (ws.bufferedAmount > 200000) return;
 
   tmpCtx.drawImage(video, 0, 0, CANVAS_W, CANVAS_H);
-  const b64 = tmpCanvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+  const quality = IS_REMOTE ? 0.6 : 0.92;
+  const b64 = tmpCanvas.toDataURL('image/jpeg', quality).split(',')[1];
 
+  waitingForResponse = true;
   ws.send(JSON.stringify({
     type: 'frame',
     data: b64,
     frame_time: video.currentTime,
+    light: LIGHT_MODE,
   }));
+}
+
+// Draw detection overlay on the video (light mode)
+function drawOverlayLoop() {
+  if (!playing) return;
+  drawOverlay();
+  requestAnimationFrame(drawOverlayLoop);
+}
+
+function drawOverlay() {
+  const vw = video.videoWidth || 1;
+  const vh = video.videoHeight || 1;
+  const rect = video.getBoundingClientRect();
+  overlay.width = rect.width;
+  overlay.height = rect.height;
+  const sx = rect.width / CANVAS_W;
+  const sy = rect.height / CANVAS_H;
+
+  ovctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  // Counting line
+  const linePixelY = lastLineY * overlay.height;
+  ovctx.strokeStyle = 'rgba(255,0,0,0.7)';
+  ovctx.lineWidth = 2;
+  ovctx.beginPath();
+  ovctx.moveTo(0, linePixelY);
+  ovctx.lineTo(overlay.width, linePixelY);
+  ovctx.stroke();
+  ovctx.fillStyle = 'rgba(255,0,0,0.8)';
+  ovctx.font = '11px monospace';
+  ovctx.fillText('COUNTING LINE', 8, linePixelY - 5);
+
+  // Detection boxes
+  const COLORS = {
+    'Car':'#00d4ff','Motorcycle':'#ff6b35','Auto':'#ffcc00',
+    'Bus':'#39ff14','Truck/HGV':'#ff4488','LCV/Van':'#bb88ff',
+    'Tractor':'#ff9933','Bicycle':'#88ffee'
+  };
+
+  for (const b of lastBoxes) {
+    const x1 = b.bbox[0]*sx, y1 = b.bbox[1]*sy;
+    const x2 = b.bbox[2]*sx, y2 = b.bbox[3]*sy;
+    const color = COLORS[b.cls] || '#ffffff';
+
+    ovctx.strokeStyle = color;
+    ovctx.lineWidth = 2;
+    ovctx.strokeRect(x1, y1, x2-x1, y2-y1);
+
+    // Label background
+    const label = `${b.cls} ${b.speed}km/h`;
+    ovctx.font = 'bold 11px monospace';
+    const tw = ovctx.measureText(label).width;
+    ovctx.fillStyle = color;
+    ovctx.fillRect(x1, y1-16, tw+6, 16);
+    ovctx.fillStyle = '#000';
+    ovctx.fillText(label, x1+3, y1-4);
+  }
 }
 
 // =====================================================
@@ -554,11 +633,25 @@ let pipelineQueue = [];
 let pipelineRunning = false;
 
 function handleResult(msg) {
-  // Draw annotated frame
+  waitingForResponse = false;  // allow next frame to be sent
+
+  // Light mode: store boxes for overlay drawing
+  if (msg.boxes) {
+    lastBoxes = msg.boxes;
+    if (msg.line_y) lastLineY = msg.line_y;
+  }
+
+  // Full mode: draw annotated frame on hidden canvas (localhost)
   if (msg.frame) {
     const img = new Image();
     img.onload = () => {
-      octx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+      // In full mode, show annotated frame; hide video
+      if (!LIGHT_MODE) {
+        outCanvas.style.display = 'block';
+        video.style.position = 'absolute';
+        video.style.opacity = '0';
+        octx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+      }
     };
     img.src = 'data:image/jpeg;base64,' + msg.frame;
   }
