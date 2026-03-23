@@ -67,16 +67,26 @@ except Exception as e:
     YOLO_AVAILABLE = False
     model = None
 
-# ── EasyOCR (for number plate reading) ────────────────────
-try:
-    import easyocr
-    plate_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-    OCR_AVAILABLE = True
-    print("✅ EasyOCR loaded successfully")
-except Exception as e:
-    print(f"⚠️  EasyOCR not available: {e}")
-    OCR_AVAILABLE = False
-    plate_reader = None
+# ── EasyOCR (loaded in background so server starts fast) ──
+import threading
+OCR_AVAILABLE = False
+plate_reader = None
+_ocr_lock = threading.Lock()
+
+def _load_ocr():
+    global plate_reader, OCR_AVAILABLE
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+        with _ocr_lock:
+            plate_reader = reader
+            OCR_AVAILABLE = True
+        print("✅ EasyOCR loaded successfully (background)")
+    except Exception as e:
+        print(f"⚠️  EasyOCR not available: {e}")
+
+threading.Thread(target=_load_ocr, daemon=True).start()
+print("⏳ EasyOCR loading in background...")
 
 # Indian number plate pattern: XX 00 XX 0000
 # Strict: must have state code (2 letters), district (1-2 digits), series (1-3 letters), number (4 digits)
