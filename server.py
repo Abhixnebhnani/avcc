@@ -279,7 +279,10 @@ frontend_path = os.path.join(os.path.dirname(__file__), "frontend")
 async def root():
     idx = os.path.join(frontend_path, "index.html")
     if os.path.exists(idx):
-        return FileResponse(idx)
+        return FileResponse(idx, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache", "Expires": "0",
+        })
     return {"status": "AVCC Server running", "yolo": YOLO_AVAILABLE}
 
 @app.get("/health")

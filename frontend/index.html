@@ -362,6 +362,8 @@ function connectWS() {
   ws.onopen = () => {
     wsConnected = true;
     setWsStatus(true);
+    console.log(`✅ WebSocket connected to ${WS_URL + sessionId}`);
+    console.log(`🔧 Mode: ${IS_REMOTE ? 'REMOTE (light)' : 'LOCAL (full)'}, Resolution: ${CANVAS_W}x${CANVAS_H}`);
     // Send config
     ws.send(JSON.stringify({
       type: 'config',
@@ -380,8 +382,8 @@ function connectWS() {
     if (msg.type === 'result') handleResult(msg);
   };
 
-  ws.onerror = () => { setWsStatus(false); console.warn('WS error'); };
-  ws.onclose = () => { wsConnected = false; setWsStatus(false); stopFrameSending(); };
+  ws.onerror = (e) => { setWsStatus(false); console.error('❌ WS error:', e); };
+  ws.onclose = (e) => { wsConnected = false; setWsStatus(false); stopFrameSending(); console.warn('WS closed:', e.code, e.reason); };
 }
 
 function setWsStatus(connected) {
@@ -551,22 +553,41 @@ function stopFrameSending() {
   if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
 }
 
+let _lastSendTime = 0;
+let _framesSent = 0;
+let _framesReceived = 0;
+
 function trySendFrame() {
   if (!playing || !wsConnected || !ws || video.readyState < 2) return;
-  if (waitingForResponse) return;  // still waiting for previous response
+
+  // Timeout: if waiting > 10s, assume response was lost
+  if (waitingForResponse && (Date.now() - _lastSendTime) > 10000) {
+    console.warn('⚠️ Response timeout — resetting');
+    waitingForResponse = false;
+  }
+  if (waitingForResponse) return;
   if (ws.bufferedAmount > 200000) return;
 
   tmpCtx.drawImage(video, 0, 0, CANVAS_W, CANVAS_H);
-  const quality = IS_REMOTE ? 0.6 : 0.92;
+  const quality = IS_REMOTE ? 0.65 : 0.92;
   const b64 = tmpCanvas.toDataURL('image/jpeg', quality).split(',')[1];
 
   waitingForResponse = true;
-  ws.send(JSON.stringify({
-    type: 'frame',
-    data: b64,
-    frame_time: video.currentTime,
-    light: LIGHT_MODE,
-  }));
+  _lastSendTime = Date.now();
+  _framesSent++;
+
+  try {
+    ws.send(JSON.stringify({
+      type: 'frame',
+      data: b64,
+      frame_time: video.currentTime,
+      light: LIGHT_MODE,
+    }));
+    if (_framesSent % 10 === 1) console.log(`📤 Frame #${_framesSent} sent (${(b64.length/1024).toFixed(0)}KB) light=${LIGHT_MODE}`);
+  } catch(e) {
+    console.error('Send error:', e);
+    waitingForResponse = false;
+  }
 }
 
 // Draw detection overlay on the video (light mode)
@@ -634,10 +655,15 @@ let pipelineRunning = false;
 
 function handleResult(msg) {
   waitingForResponse = false;  // allow next frame to be sent
+  _framesReceived++;
+
+  if (_framesReceived % 5 === 1) {
+    console.log(`📥 Result #${_framesReceived}: ${msg.detections} det, ${msg.boxes ? msg.boxes.length : 0} boxes, ${msg.proc_ms}ms, light=${!!msg.boxes}`);
+  }
 
   // Light mode: store boxes for overlay drawing
-  if (msg.boxes) {
-    lastBoxes = msg.boxes;
+  if (msg.boxes !== undefined) {
+    lastBoxes = msg.boxes || [];
     if (msg.line_y) lastLineY = msg.line_y;
   }
 
