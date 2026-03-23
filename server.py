@@ -557,13 +557,17 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 light_mode = msg.get("light", False)
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:11]
 
+                print(f"📷 Frame received: {len(frame_b64)//1024}KB, light={light_mode}, time={frame_time:.2f}")
+
                 # Decode frame
                 img_bytes = base64.b64decode(frame_b64)
                 arr = np.frombuffer(img_bytes, np.uint8)
                 frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
                 if frame is None:
+                    print("⚠️ Frame decode failed!")
                     continue
+                print(f"📐 Frame decoded: {frame.shape[1]}x{frame.shape[0]}")
 
                 state.frame_w = frame.shape[1]
                 state.frame_h = frame.shape[0]
@@ -571,8 +575,8 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 detections = []
 
                 if YOLO_AVAILABLE and model:
-                    # Lower confidence for motorcycles which YOLO is less sure about
-                    results = model(frame, verbose=False, conf=0.40)[0]
+                    # imgsz=480 reduces memory usage on constrained servers
+                    results = model(frame, verbose=False, conf=0.40, imgsz=480)[0]
                     for box in results.boxes:
                         cls_id = int(box.cls[0])
                         cls_name = results.names[cls_id].lower()
@@ -593,9 +597,9 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                             continue
                         refined = refine_class(cls_name, w, h, area)
                         detections.append({"bbox":[x1,y1,x2,y2], "cls":refined, "conf":conf})
+                    print(f"🔍 YOLO: {len(detections)} detections in {round((time.time()-t0)*1000)}ms")
                 else:
-                    # Fallback: basic motion/colour simulation (no YOLO)
-                    pass
+                    print("⚠️ YOLO not available, skipping detection")
 
                 # Track
                 trackers = update_trackers(state, detections, frame_time)
@@ -662,8 +666,39 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
     except Exception as e:
         print(f"❌ Error in session {session_id}: {e}")
         import traceback; traceback.print_exc()
+        # Try to notify client of the error
+        try:
+            await ws.send_text(json.dumps({"type": "error", "msg": str(e)}))
+        except:
+            pass
     finally:
         sessions.pop(session_id, None)
+
+
+@app.post("/test-detect")
+async def test_detect():
+    """Quick test: generate a dummy frame and run YOLO to verify detection works."""
+    import psutil
+    mem = psutil.Process().memory_info()
+    result = {
+        "yolo": YOLO_AVAILABLE,
+        "ocr": OCR_AVAILABLE,
+        "ram_mb": round(mem.rss / 1024 / 1024, 1),
+    }
+    if YOLO_AVAILABLE and model:
+        try:
+            # Create a test image (colored rectangle to simulate a car-like shape)
+            test_img = np.zeros((480, 640, 3), dtype=np.uint8)
+            test_img[100:300, 200:450] = (128, 128, 128)  # gray box
+            res = model(test_img, verbose=False, conf=0.25, imgsz=480)[0]
+            result["test_detections"] = len(res.boxes)
+            result["test_classes"] = [res.names[int(b.cls[0])] for b in res.boxes]
+            result["inference"] = "ok"
+            mem2 = psutil.Process().memory_info()
+            result["ram_after_mb"] = round(mem2.rss / 1024 / 1024, 1)
+        except Exception as e:
+            result["inference"] = f"FAILED: {e}"
+    return result
 
 # ── Annotation ────────────────────────────────────────────
 def annotate_frame(frame, state: SessionState, trackers: dict):
